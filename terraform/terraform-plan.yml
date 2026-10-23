@@ -1,0 +1,81 @@
+
+parameters:
+- name: stageEnabled
+  type: boolean
+  default: true
+
+- name: workingDirectory
+  type: string
+  default: 'Environment/dev'
+
+- name: serviceConnection
+  type: string
+  default: 'haveli-frontend'
+
+- name: backendResourceGroup
+  type: string
+  default: 'haweli-pipe-rg'
+
+- name: backendStorageAccount
+  type: string
+  default: 'hawlipipelinestr2101'
+
+- name: backendContainer
+  type: string
+  default: 'hawpipecnt2101'
+
+- name: backendKey
+  type: string
+  default: 'frontend-dev.tfstate'
+
+stages:
+- stage: TerraformPlan
+  displayName: Terraform Init Validate Plan
+  dependsOn: TerraformScan
+
+  condition: and(
+    in(dependencies.TerraformScan.result, 'Succeeded', 'SucceededWithIssues', 'Skipped'),
+    ${{ parameters.stageEnabled }}
+    )
+
+  jobs:
+  - job: Plan
+    displayName: Create Terraform Plan
+
+    steps:
+    - checkout: self
+
+    - task: TerraformTask@5
+      displayName: Terraform Init
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}'
+        backendServiceArm: '${{ parameters.serviceConnection }}'
+        backendAzureRmResourceGroupName: '${{ parameters.backendResourceGroup }}'
+        backendAzureRmStorageAccountName: '${{ parameters.backendStorageAccount }}'
+        backendAzureRmContainerName: '${{ parameters.backendContainer }}'
+        backendAzureRmKey: '${{ parameters.backendKey }}'
+
+    - task: TerraformTask@5
+      displayName: Terraform Validate
+      inputs:
+        provider: azurerm
+        command: validate
+        workingDirectory: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}'
+
+    - task: TerraformTask@5
+      displayName: Terraform Plan
+      inputs:
+        provider: azurerm
+        command: plan
+        workingDirectory: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}'
+        environmentServiceNameAzureRM: '${{ parameters.serviceConnection }}'
+        commandOptions: '-input=false -out=tfplan'
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publish Saved Plan
+      inputs:
+        targetPath: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}/tfplan'
+        artifact: terraform-plan
+        publishLocation: pipeline

@@ -1,0 +1,130 @@
+
+parameters:
+- name: stageEnabled
+  type: boolean
+  default: true
+
+- name: workingDirectory
+  type: string
+  default: 'Environment/dev'
+
+- name: runTflint
+  type: boolean
+  default: true
+
+- name: runTerrascan
+  type: boolean
+  default: true
+
+- name: runTrufflehog
+  type: boolean
+  default: true
+
+stages:
+- stage: TerraformScan
+  displayName: Terraform Security and Quality Scan
+  condition: and(succeeded(), ${{ parameters.stageEnabled }})
+
+  jobs:
+  - job: Scan
+    displayName: Run scanners
+
+    steps:
+    - checkout: self
+
+    - task: PowerShell@2
+      displayName: TFLint
+      condition: and(succeeded(), ${{ parameters.runTflint }})
+      inputs:
+        targetType: inline
+        workingDirectory: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}'
+        script: |
+          $ErrorActionPreference = 'Stop'
+
+          if (-not (Get-Command tflint -ErrorAction SilentlyContinue)) {
+            throw 'TFLint is not installed or not on PATH.'
+          }
+
+          tflint --init
+          if ($LASTEXITCODE -ne 0) {
+            throw 'TFLint initialization failed.'
+          }
+
+          tflint --format json > tflint.json
+          $code = $LASTEXITCODE
+          Write-Host "TFLint exit code: $code"
+
+          if ($code -ne 0) {
+            Write-Warning 'TFLint reported issues or returned a non-zero code.'
+          }
+
+          exit 0
+
+    - task: PowerShell@2
+      displayName: Terrascan
+      condition: and(succeeded(), ${{ parameters.runTerrascan }})
+      inputs:
+        targetType: inline
+        workingDirectory: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}'
+        script: |
+          $ErrorActionPreference = 'Stop'
+
+          if (-not (Get-Command terrascan -ErrorAction SilentlyContinue)) {
+            throw 'Terrascan is not installed or not on PATH.'
+          }
+
+          terrascan init
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Terrascan initialization failed.'
+          }
+
+          terrascan scan -i terraform -o json > terrascan.json
+          $code = $LASTEXITCODE
+          Write-Host "Terrascan exit code: $code"
+
+          if ($code -ne 0) {
+            Write-Warning 'Terrascan reported issues or returned a non-zero code.'
+          }
+
+          exit 0
+
+    - task: PowerShell@2
+      displayName: TruffleHog Secret Scan
+      condition: and(succeeded(), ${{ parameters.runTrufflehog }})
+      inputs:
+        targetType: inline
+        workingDirectory: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}'
+        script: |
+          $ErrorActionPreference = 'Stop'
+
+          if (-not (Get-Command trufflehog -ErrorAction SilentlyContinue)) {
+            throw 'TruffleHog is not installed or not on PATH.'
+          }
+
+          trufflehog filesystem . --json > trufflehog.json
+          $code = $LASTEXITCODE
+          Write-Host "TruffleHog exit code: $code"
+
+          if ($code -ne 0) {
+            Write-Warning 'TruffleHog reported potential secrets or returned a non-zero code.'
+          }
+
+          exit 0
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publish TFLint Report
+      condition: always()
+      continueOnError: true
+      inputs:
+        targetPath: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}/tflint.json'
+        artifact: tflint-report
+        publishLocation: pipeline
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publish Terrascan Report
+      condition: always()
+      continueOnError: true
+      inputs:
+        targetPath: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}/terrascan.json'
+        artifact: terrascan-report
+        publishLocation: pipeline

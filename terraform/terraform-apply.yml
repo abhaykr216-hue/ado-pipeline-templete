@@ -1,0 +1,94 @@
+
+parameters:
+- name: stageEnabled
+  type: boolean
+  default: true
+
+- name: workingDirectory
+  type: string
+  default: 'Environment/dev'
+
+- name: serviceConnection
+  type: string
+  default: 'haveli-frontend'
+
+- name: backendResourceGroup
+  type: string
+  default: 'haweli-pipe-rg'
+
+- name: backendStorageAccount
+  type: string
+  default: 'hawlipipelinestr2101'
+
+- name: backendContainer
+  type: string
+  default: 'hawpipecnt2101'
+
+- name: backendKey
+  type: string
+  default: 'frontend-dev.tfstate'
+
+- name: notifyUsers
+  type: string
+  default: ''
+
+stages:
+- stage: TerraformApply
+  displayName: Terraform Apply
+  dependsOn: TerraformPlan
+  condition: and(succeeded(), ${{ parameters.stageEnabled }}, eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+
+  jobs:
+  - job: ManualApproval
+    displayName: Approve Terraform Deployment
+    pool: server
+    timeoutInMinutes: 1440
+
+    steps:
+    - task: ManualValidation@1
+      timeoutInMinutes: 720
+      inputs:
+        notifyUsers: '${{ parameters.notifyUsers }}'
+        approvers: ''
+        allowApproversToApproveTheirOwnRuns: false
+        instructions: 'Review the Terraform plan artifact and approve only authorized changes.'
+        onTimeout: reject
+
+  - job: Apply
+    displayName: Apply Approved Terraform Plan
+    dependsOn: ManualApproval
+    condition: succeeded()
+
+    pool:
+      name: 'Frontend pool'
+
+    steps:
+    - checkout: self
+
+    - task: DownloadPipelineArtifact@2
+      displayName: Download Saved Plan
+      inputs:
+        buildType: current
+        artifactName: terraform-plan
+        targetPath: '$(Pipeline.Workspace)/terraform-plan'
+
+    - task: TerraformTask@5
+      displayName: Terraform Init
+      inputs:
+        provider: azurerm
+        command: init
+        workingDirectory: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}'
+        backendServiceArm: '${{ parameters.serviceConnection }}'
+        backendAzureRmResourceGroupName: '${{ parameters.backendResourceGroup }}'
+        backendAzureRmStorageAccountName: '${{ parameters.backendStorageAccount }}'
+        backendAzureRmContainerName: '${{ parameters.backendContainer }}'
+        backendAzureRmKey: '${{ parameters.backendKey }}'
+
+    - task: TerraformTask@5
+      displayName: Apply Saved Plan
+      inputs:
+        provider: azurerm
+        command: apply
+        workingDirectory: '$(Build.SourcesDirectory)/${{ parameters.workingDirectory }}'
+        environmentServiceNameAzureRM: '${{ parameters.serviceConnection }}'
+        commandOptions: '-input=false "$(Pipeline.Workspace)/terraform-plan/tfplan"'
